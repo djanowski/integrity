@@ -24,6 +24,18 @@ module Integrity
       migrate_db(direction)
     end
 
+    desc "build [URL]",
+      "Ping the Integrity server located at the given URL and tell it to build your project."
+    def build(url)
+      old_head, new_head, ref = $stdin.gets.split unless $stdin.tty?
+
+      old_head = old_head ? "^#{old_head}" : "-1"
+      new_head ||= "HEAD"
+      ref ||= "refs/heads/master"
+
+      puts trigger_build(url, old_head, new_head, ref)
+    end
+
     private
       attr_reader :root
 
@@ -93,10 +105,8 @@ module Integrity
       def set_up_migrations
         without_pluralizing_table_names do
           # Create migration_info and assume we're in version one of the schema
-          class MigrationInfo
-            include DataMapper::Resource
-            property :migration_name, String, :length => 255
-          end
+          MigrationInfo.send(:include, DataMapper::Resource)
+          MigrationInfo.property :migration_name, String, :length => 255
         
           MigrationInfo.auto_upgrade!
           MigrationInfo.create(:migration_name => "initial")
@@ -111,6 +121,20 @@ module Integrity
         repository(:default).adapter.resource_naming_convention = DataMapper::NamingConventions::Resource::Underscored
         yield
         repository(:default).adapter.resource_naming_convention = DataMapper::NamingConventions::Resource::UnderscoredAndPluralized
+      end
+
+      def trigger_build(url, old_head, new_head, ref)
+        require 'net/http'
+        require 'uri'
+
+        revisions = `git rev-list #{new_head} #{old_head}`.split("\n")
+        revisions.map! {|r| %Q({"id":"#{r}", "timestamp": ""}) }.join(",")
+
+        payload = %Q({"ref":"#{ref}", "commits":[#{revisions}]})
+
+        Net::HTTP.post_form(URI.parse(url), {
+          :payload => payload
+        }).body
       end
   end
 end
